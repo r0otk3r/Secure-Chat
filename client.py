@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 import socket, threading, json, os, base64, sys, argparse, hmac, hashlib
 from tqdm import tqdm
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -83,26 +82,52 @@ def receiver(conn,key):
                 print(f"\nReceived file 'received_{filename}' ({len(data)} bytes)\nYou: ",end="",flush=True)
     except Exception as e: print("[!] Receiver error:",e)
 
-# Input loop
-def input_loop(conn,key):
+# Input loop to send messages/files in chunks
+def input_loop(conn, key):
     try:
         while True:
-            msg=input("You: ").strip()
-            if not msg: continue
-            if msg.lower()=="/quit": break
+            msg = input("You: ").strip()
+            if not msg:
+                continue
+            if msg.lower() == "/quit":
+                break
+
+            # Send file in chunks
             if msg.startswith("/sendfile "):
-                path=msg.split(" ",1)[1]
-                if not os.path.exists(path): print("File not found."); continue
-                filename=os.path.basename(path)
-                with open(path,"rb") as f: data=f.read()
-                payload=aes_encrypt(key,data)
-                blob={"type":"file","filename":filename,"payload":payload}
-                with tqdm(total=len(json.dumps(blob).encode()),unit="B",unit_scale=True,desc=f"Sending {filename}") as pbar:
-                    conn.send_json(blob)
-                    pbar.update(len(json.dumps(blob).encode()))
-                print("File sent."); continue
-            payload=aes_encrypt(key,msg.encode())
-            conn.send_json({"type":"message","payload":payload})
+                path = msg.split(" ", 1)[1]
+                if not os.path.exists(path):
+                    print("File not found.")
+                    continue
+
+                filename = os.path.basename(path)
+                chunk_size = 64 * 1024  # 64 KB per chunk
+                file_size = os.path.getsize(path)
+                total_chunks = (file_size + chunk_size - 1) // chunk_size
+
+                with open(path, "rb") as f:
+                    for chunk_index in range(total_chunks):
+                        chunk_data = f.read(chunk_size)
+                        payload = aes_encrypt(key, chunk_data)
+                        packet = {
+                            "type": "file_chunk",
+                            "filename": filename,
+                            "chunk_index": chunk_index,
+                            "total_chunks": total_chunks,
+                            "payload": payload
+                        }
+
+                        conn.send_json(packet)
+
+                        # Progress bar
+                        print(f"\rSending {filename} ({chunk_index + 1}/{total_chunks})", end="", flush=True)
+
+                print(f"\nFile '{filename}' sent successfully.")
+                continue
+
+            # Send normal message
+            payload = aes_encrypt(key, msg.encode())
+            conn.send_json({"type": "message", "payload": payload})
+
     finally:
         conn.close()
 
