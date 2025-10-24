@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 import socket, threading, json, os, base64, signal, sys, argparse, hmac, hashlib
 from tqdm import tqdm
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -78,21 +77,49 @@ class Connection:
         except: pass
         self.sock.close()
 
-# Receive messages/files
-def receive_loop(conn,key):
+# Receive messages/files in chunks
+def receive_loop(conn, key):
     try:
+        # Track open files being received
+        open_files = {}  # filename -> file object
+
         while True:
             obj = conn.recv_json()
-            if obj is None: break
-            if obj.get("type")=="message":
-                msg = aes_decrypt(key,obj["payload"]).decode()
-                print(f"\nclient: {msg}\nYou: ",end="",flush=True)
-            elif obj.get("type")=="file":
-                filename = obj.get("filename","unknown")
-                data = aes_decrypt(key,obj["payload"])
-                with open(f"received_{filename}","wb") as f: f.write(data)
-                print(f"\nReceived file 'received_{filename}' ({len(data)} bytes)\nYou: ",end="",flush=True)
-    except Exception as e: print(f"[!] Receive error: {e}")
+            if obj is None:
+                break
+
+            if obj.get("type") == "message":
+                msg = aes_decrypt(key, obj["payload"]).decode()
+                print(f"\nclient: {msg}\nYou: ", end="", flush=True)
+
+            elif obj.get("type") == "file_chunk":
+                filename = obj.get("filename", "unknown")
+                chunk_index = obj.get("chunk_index", 0)
+                total_chunks = obj.get("total_chunks", 1)
+                payload = obj.get("payload")
+
+                # Decrypt chunk
+                data = aes_decrypt(key, payload)
+
+                # Open file if first chunk
+                if filename not in open_files:
+                    open_files[filename] = open(f"received_{filename}", "wb")
+
+                # Write chunk
+                open_files[filename].write(data)
+
+                # Progress display
+                print(f"\rReceiving {filename} ({chunk_index + 1}/{total_chunks})", end="", flush=True)
+
+                # Close file if last chunk
+                if chunk_index + 1 == total_chunks:
+                    open_files[filename].close()
+                    del open_files[filename]
+                    print(f"\nReceived file 'received_{filename}' ({total_chunks} chunks)\nYou: ", end="", flush=True)
+
+    except Exception as e:
+        print(f"[!] Receive error: {e}")
+
 
 # Input loop to send messages/files
 def input_loop(conn,key):
